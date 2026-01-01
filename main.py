@@ -70,21 +70,28 @@ def get_shorts_list(channel_url: str) -> list[dict]:
         return shorts_list
 
 
-def download_short(url: str, output_dir: Path) -> dict | None:
+def download_short(url: str, output_dir: Path, include_id: bool = True) -> dict | None:
     """
     Download a single Short in best quality and return metadata.
     
     Args:
         url: YouTube video URL
         output_dir: Directory to save the video
+        include_id: Whether to include video ID in filename (prevents duplicates)
     
     Returns:
         Dict with video metadata or None if failed
     """
+    # Choose filename template based on user preference
+    if include_id:
+        template = '%(title)s_%(id)s.%(ext)s'  # With ID (safe, prevents duplicates)
+    else:
+        template = '%(title)s.%(ext)s'  # Without ID (cleaner, may have conflicts)
+    
     ydl_opts = {
         'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best',  # Prefer MP4
         'merge_output_format': 'mp4',  # Force MP4 container
-        'outtmpl': str(output_dir / '%(title)s.%(ext)s'),
+        'outtmpl': str(output_dir / template),
         'quiet': True,  # Suppress yt-dlp output
         'no_warnings': True,  # Suppress warnings
         'noprogress': True,  # No download progress bar
