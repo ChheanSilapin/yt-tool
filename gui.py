@@ -196,7 +196,7 @@ class DownloadTab(QWidget):
         # Options
         self.include_id_checkbox = QCheckBox("Include video ID in filename")
         self.include_id_checkbox.setFont(QFont(FONT_FAMILY, 9))
-        self.include_id_checkbox.setChecked(True)
+        self.include_id_checkbox.setChecked(False)
         self.include_id_checkbox.setStyleSheet("color:#9CA3AF;")
         layout.addWidget(self.include_id_checkbox)
         
