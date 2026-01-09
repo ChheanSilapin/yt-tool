@@ -67,7 +67,7 @@ def process_single_video(
     model_size: str = "medium",
     language: str = None,
     vad_filter: bool = True,
-    highlight_color: str = "&H0000FFFF"
+    highlight_color: str = None  # Use default from create_subtitle.py
 ) -> bool:
     """
     Process a single video: transcribe + create subtitles + burn.
@@ -108,11 +108,10 @@ def process_single_video(
         )
         
         # Create subtitles
-        create_ass_file(
-            words,
-            str(temp_ass),
-            highlight_color=highlight_color
-        )
+        ass_kwargs = {}
+        if highlight_color:
+            ass_kwargs['highlight_color'] = highlight_color
+        create_ass_file(words, str(temp_ass), **ass_kwargs)
         
         # Burn subtitles
         burn_subtitles(str(temp_input), str(temp_ass), str(temp_output))
