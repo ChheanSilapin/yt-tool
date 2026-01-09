@@ -35,8 +35,8 @@ def create_ass_file(words, filename="captions.ass"):
     """
     # Colors in ASS format (BGR with alpha: &HAABBGGRR)
     white_color = "&H00FFFFFF"
-    black_outline = "&H00000000"
-    yellow_bg = "&H00FFFF00"  # Yellow (cyan in RGB order: 00 blue, FF green, FF red)
+    black_outline = "&H00FF0080"
+    yellow_bg = "&H00FF0080"  # Yellow (cyan in RGB order: 00 blue, FF green, FF red)
 
     with open(filename, "w", encoding="utf-8") as f:
         f.write("[Script Info]\n")
@@ -47,7 +47,7 @@ def create_ass_file(words, filename="captions.ass"):
         f.write("[V4+ Styles]\n")
         f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
         # Default style: white text with black outline (BorderStyle 1)
-        f.write(f"Style: Default,Poppins,80,{white_color},{white_color},{black_outline},{black_outline},-1,0,1,3,0,2,10,10,600,1\n")
+        f.write(f"Style: Default,Poppins,80,{white_color},{white_color},{black_outline},{black_outline},-1,0,1,2,0,2,10,10,600,1\n")
         # Highlight style: white text with yellow box background (BorderStyle 3 = opaque box)
         f.write(f"Style: Highlight,Poppins,80,{white_color},{white_color},{yellow_bg},{yellow_bg},-1,0,3,8,0,2,10,10,600,1\n")
         f.write("\n")
@@ -68,10 +68,30 @@ def create_ass_file(words, filename="captions.ass"):
             i += chunk_size
 
         # Create karaoke-style dialogue events
-        for chunk in chunks:
+        for chunk_idx, chunk in enumerate(chunks):
+            # Get the next chunk's start time (for gap filling at chunk end)
+            if chunk_idx + 1 < len(chunks):
+                next_chunk_start = chunks[chunk_idx + 1][0]['start']
+            else:
+                next_chunk_start = None
+            
             for highlight_idx, highlighted_word in enumerate(chunk):
                 start_time = highlighted_word['start']
-                end_time = highlighted_word['end']
+                
+                # Extend end time to next word's start (fill all gaps)
+                is_last_word_in_chunk = (highlight_idx == len(chunk) - 1)
+                
+                if is_last_word_in_chunk:
+                    # Last word in chunk - extend to next chunk start
+                    if next_chunk_start is not None:
+                        end_time = next_chunk_start
+                    else:
+                        end_time = highlighted_word['end']
+                else:
+                    # Not last word - extend to next word in same chunk
+                    next_word = chunk[highlight_idx + 1]
+                    end_time = next_word['start']
+                
                 start_str = format_time_ass(start_time)
                 end_str = format_time_ass(end_time)
 
@@ -141,6 +161,8 @@ def burn_subtitles(video_path, ass_path, output_path):
         '-i', video_path,
         '-vf', f"subtitles={ass_filename}",
         '-c:v', 'libx264',
+        '-crf', '18',  # High quality (lower = better, 18 is visually lossless)
+        '-preset', 'medium',  # Balance speed/quality
         '-c:a', 'copy',
         output_path
     ]

@@ -94,9 +94,9 @@ class DownloadWorker(QThread):
                         metadata = future.result()
                         if metadata:
                             metadata_list.append(metadata)
-                            self.status.emit(f'Downloaded: {metadata.get("title", "")[:30]}...')
+                            self.status.emit(f'Downloaded: {metadata.get("title", "")[:130]}...')
                     except Exception:
-                        self.status.emit(f'Failed: {short["title"][:30]}...')
+                        self.status.emit(f'Failed: {short["title"][:130]}...')
             
             self.finished_download.emit(len(metadata_list), total)
             
@@ -138,7 +138,7 @@ class SubtitleWorker(QThread):
                 self.progress.emit(i, total)
                 self.status.emit(f"Processing: {input_path.name}")
                 
-                output_path = self.output_dir / f"{input_path.stem}_subtitled{input_path.suffix}"
+                output_path = self.output_dir / input_path.name  # Same filename as input
                 
                 if process_single_video(input_path, output_path):
                     success += 1
