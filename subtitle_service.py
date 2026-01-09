@@ -1,12 +1,14 @@
 """
-Subtitle Service CLI
-Fast subtitle generation using faster-whisper with viral styling.
+Subtitle Service
+Orchestrates transcription + subtitle creation + burning for videos.
 """
 
 import os
-import sys
+import shutil
+import subprocess
+import tempfile
+import uuid
 import logging
-import random
 from pathlib import Path
 
 # Setup logging
@@ -16,153 +18,35 @@ logger = logging.getLogger(__name__)
 # FFmpeg setup
 import static_ffmpeg
 static_ffmpeg.add_paths()
-import ffmpeg
+
+# Import modules
+from transcribe_video import transcribe_video
+from create_subtitle import create_ass_file
 
 
-def format_time_ass(seconds):
-    """Format time for ASS subtitles (h:mm:ss.cc)"""
-    h = int(seconds // 3600)
-    m = int((seconds % 3600) // 60)
-    s = seconds % 60
-    return f"{h}:{m:02d}:{s:05.2f}"
-
-
-def create_ass_file(words, filename="captions.ass"):
-    """Create ASS subtitle file with karaoke-style word-by-word highlighting.
-    
-    Shows 2-3 words at a time, with yellow background highlight moving
-    from word to word as each is spoken.
+def burn_subtitles(video_path: str, ass_path: str, output_path: str, crf: int = 18):
     """
-    # Colors in ASS format (BGR with alpha: &HAABBGGRR)
-    white_color = "&H00FFFFFF"
-    black_outline = "&H00FF0080"
-    yellow_bg = "&H00FF0080"  # Yellow (cyan in RGB order: 00 blue, FF green, FF red)
-
-    with open(filename, "w", encoding="utf-8") as f:
-        f.write("[Script Info]\n")
-        f.write("ScriptType: v4.00+\n")
-        f.write("PlayResX: 1080\n")
-        f.write("PlayResY: 1920\n")
-        f.write("\n")
-        f.write("[V4+ Styles]\n")
-        f.write("Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n")
-        # Default style: white text with black outline (BorderStyle 1)
-        f.write(f"Style: Default,Poppins,80,{white_color},{white_color},{black_outline},{black_outline},-1,0,1,2,0,2,10,10,600,1\n")
-        # Highlight style: white text with yellow box background (BorderStyle 3 = opaque box)
-        f.write(f"Style: Highlight,Poppins,80,{white_color},{white_color},{yellow_bg},{yellow_bg},-1,0,3,8,0,2,10,10,600,1\n")
-        f.write("\n")
-        f.write("[Events]\n")
-        f.write("Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n")
-
-        if not words:
-            return filename
-
-        # Chunk words into groups of 2-3
-        i = 0
-        chunks = []
-        while i < len(words):
-            chunk_size = random.randint(2, 3)
-            chunk = words[i:i + chunk_size]
-            if chunk:
-                chunks.append(chunk)
-            i += chunk_size
-
-        # Create karaoke-style dialogue events
-        for chunk_idx, chunk in enumerate(chunks):
-            # Get the next chunk's start time (for gap filling at chunk end)
-            if chunk_idx + 1 < len(chunks):
-                next_chunk_start = chunks[chunk_idx + 1][0]['start']
-            else:
-                next_chunk_start = None
-            
-            for highlight_idx, highlighted_word in enumerate(chunk):
-                start_time = highlighted_word['start']
-                
-                # Extend end time to next word's start (fill all gaps)
-                is_last_word_in_chunk = (highlight_idx == len(chunk) - 1)
-                
-                if is_last_word_in_chunk:
-                    # Last word in chunk - extend to next chunk start
-                    if next_chunk_start is not None:
-                        end_time = next_chunk_start
-                    else:
-                        end_time = highlighted_word['end']
-                else:
-                    # Not last word - extend to next word in same chunk
-                    next_word = chunk[highlight_idx + 1]
-                    end_time = next_word['start']
-                
-                start_str = format_time_ass(start_time)
-                end_str = format_time_ass(end_time)
-
-                # Build text with current word having yellow background using style override
-                text_parts = []
-                for idx, word_info in enumerate(chunk):
-                    word_text = word_info['word'].strip().upper()
-                    if idx == highlight_idx:
-                        # Switch to Highlight style (yellow box background)
-                        text_parts.append(f"{{\\rHighlight}}{word_text}{{\\rDefault}}")
-                    else:
-                        # Normal white text
-                        text_parts.append(f"{word_text}")
-                
-                text_content = " ".join(text_parts)
-                f.write(f"Dialogue: 0,{start_str},{end_str},Default,,0,0,0,,{text_content}\n")
-
-    logger.info(f"Created subtitle file: {filename}")
-    return filename
-
-
-def transcribe_video(video_path, model_size="medium"):
-    """Transcribe video using faster-whisper."""
-    from faster_whisper import WhisperModel
+    Burn ASS subtitles into video using FFmpeg.
     
-    logger.info(f"Loading faster-whisper model: {model_size}")
-    
-    # Try GPU first, fall back to CPU
-    try:
-        model = WhisperModel(model_size, device="cuda", compute_type="float16")
-        logger.info("Using GPU (CUDA)")
-    except Exception:
-        model = WhisperModel(model_size, device="cpu", compute_type="int8")
-        logger.info("Using CPU")
-
-    logger.info(f"Transcribing: {video_path}")
-    segments, info = model.transcribe(video_path, word_timestamps=True)
-    
-    # Extract words from segments
-    words = []
-    for segment in segments:
-        if segment.words:
-            for word in segment.words:
-                words.append({
-                    'word': word.word,
-                    'start': word.start,
-                    'end': word.end
-                })
-    
-    logger.info(f"Transcribed {len(words)} words")
-    return words
-
-
-import subprocess
-
-def burn_subtitles(video_path, ass_path, output_path):
-    """Burn ASS subtitles into video using FFmpeg (subprocess)."""
+    Args:
+        video_path: Input video path
+        ass_path: ASS subtitle file path
+        output_path: Output video path
+        crf: Quality (18 = visually lossless, lower = better)
+    """
     logger.info(f"Burning subtitles into: {output_path}")
     
     # Get just the filename for the ASS file to avoid path issues
     ass_filename = os.path.basename(ass_path)
     ass_dir = os.path.dirname(ass_path)
     
-    # Use subtitles filter with relative path (change to temp dir)
     cmd = [
         'ffmpeg', '-y',
         '-i', video_path,
         '-vf', f"subtitles={ass_filename}",
         '-c:v', 'libx264',
-        '-crf', '18',  # High quality (lower = better, 18 is visually lossless)
-        '-preset', 'medium',  # Balance speed/quality
+        '-crf', str(crf),
+        '-preset', 'medium',
         '-c:a', 'copy',
         output_path
     ]
@@ -177,12 +61,28 @@ def burn_subtitles(video_path, ass_path, output_path):
     logger.info(f"Output saved: {output_path}")
 
 
-import shutil
-import uuid
-import tempfile
-
-def process_single_video(input_path, output_path):
-    """Process a single video: transcribe + burn subtitles."""
+def process_single_video(
+    input_path,
+    output_path,
+    model_size: str = "medium",
+    language: str = None,
+    vad_filter: bool = True,
+    highlight_color: str = "&H0000FFFF"
+) -> bool:
+    """
+    Process a single video: transcribe + create subtitles + burn.
+    
+    Args:
+        input_path: Input video path
+        output_path: Output video path
+        model_size: Whisper model size
+        language: Force language (e.g., "en") or None for auto
+        vad_filter: Enable VAD to skip silence/music
+        highlight_color: ASS color for highlight background
+    
+    Returns:
+        True if successful, False otherwise
+    """
     input_path = Path(input_path)
     output_path = Path(output_path)
     
@@ -199,11 +99,20 @@ def process_single_video(input_path, output_path):
         # Copy input to temp (safe path)
         shutil.copy2(input_path, temp_input)
         
-        # Transcribe
-        words = transcribe_video(str(temp_input))
+        # Transcribe with VAD
+        words = transcribe_video(
+            str(temp_input),
+            model_size=model_size,
+            language=language,
+            vad_filter=vad_filter
+        )
         
         # Create subtitles
-        create_ass_file(words, str(temp_ass))
+        create_ass_file(
+            words,
+            str(temp_ass),
+            highlight_color=highlight_color
+        )
         
         # Burn subtitles
         burn_subtitles(str(temp_input), str(temp_ass), str(temp_output))
@@ -225,7 +134,7 @@ def process_single_video(input_path, output_path):
                 f.unlink()
 
 
-def process_folder(input_folder, output_folder):
+def process_folder(input_folder, output_folder, **kwargs):
     """Process all videos in a folder."""
     input_folder = Path(input_folder)
     output_folder = Path(output_folder)
@@ -242,8 +151,8 @@ def process_folder(input_folder, output_folder):
     
     for i, video in enumerate(videos, 1):
         logger.info(f"[{i}/{len(videos)}] Processing: {video.name}")
-        output_path = output_folder / f"{video.stem}_subtitled{video.suffix}"
-        process_single_video(video, output_path)
+        output_path = output_folder / video.name
+        process_single_video(video, output_path, **kwargs)
 
 
 def main():
@@ -269,7 +178,7 @@ def main():
         output_dir = Path(output_dir) if output_dir else default_output_dir
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        output_path = output_dir / f"{input_path.stem}_subtitled{input_path.suffix}"
+        output_path = output_dir / input_path.name
         
         print(f"\nProcessing: {input_path}")
         print(f"Output: {output_path}")
